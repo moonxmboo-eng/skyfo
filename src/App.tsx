@@ -1,5 +1,12 @@
-import { startTransition, useDeferredValue, useEffect, useState } from 'react'
-import type { CSSProperties } from 'react'
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowRight,
   BatteryCharging,
@@ -43,7 +50,14 @@ type AppId =
   | 'notes'
 
 type Accent = 'azure' | 'sunset' | 'forest'
+type WallpaperId = 'aurora' | 'harbor' | 'neon' | 'bloom'
 type LayoutMode = 'window' | 'left' | 'right' | 'maximized'
+type PanelId = 'start' | 'search' | 'widgets' | 'quick' | null
+
+type WindowPosition = {
+  x: number
+  y: number
+}
 
 type AppDefinition = {
   id: AppId
@@ -51,14 +65,13 @@ type AppDefinition = {
   subtitle: string
   description: string
   icon: LucideIcon
-  tone: string
 }
 
 type WindowState = {
   appId: AppId
   minimized: boolean
   layout: LayoutMode
-  offset: number
+  position: WindowPosition
   z: number
 }
 
@@ -70,6 +83,31 @@ type SearchItem = {
   appId: AppId
 }
 
+type StoredShellState = {
+  accent: Accent
+  focusMode: boolean
+  wallpaper: WallpaperId
+  wifiEnabled: boolean
+  windows: WindowState[]
+}
+
+type DragState = {
+  appId: AppId
+  startX: number
+  startY: number
+  originX: number
+  originY: number
+}
+
+const SHELL_STORAGE_KEY = 'skyfo-shell-state-v2'
+
+const DEFAULT_WINDOW_POSITIONS: WindowPosition[] = [
+  { x: 220, y: 120 },
+  { x: 260, y: 156 },
+  { x: 300, y: 192 },
+  { x: 340, y: 228 },
+]
+
 const APP_LIBRARY: AppDefinition[] = [
   {
     id: 'explorer',
@@ -77,7 +115,6 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Projects, libraries and quick access',
     description: 'Browse folders, recent workspaces and cloud drives.',
     icon: FolderOpen,
-    tone: 'from-[#f8c466] to-[#f18f3b]',
   },
   {
     id: 'edge',
@@ -85,7 +122,6 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Dashboard, docs and launchpad',
     description: 'A polished landing page with live-style cards.',
     icon: Globe,
-    tone: 'from-[#69d0ff] to-[#2c82ff]',
   },
   {
     id: 'settings',
@@ -93,7 +129,6 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Theme, personalization and system health',
     description: 'Tune the shell with scene presets and hardware telemetry.',
     icon: Settings2,
-    tone: 'from-[#cdd5e4] to-[#8d9fbf]',
   },
   {
     id: 'terminal',
@@ -101,7 +136,6 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Realtime shell snapshot',
     description: 'Fast command surface with deployment-style logs.',
     icon: SquareTerminal,
-    tone: 'from-[#9df0cb] to-[#14b86d]',
   },
   {
     id: 'photos',
@@ -109,7 +143,6 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Curated scenes and wallpapers',
     description: 'A cinematic wall of visual cards and captures.',
     icon: Camera,
-    tone: 'from-[#ffb1b9] to-[#ff6b6b]',
   },
   {
     id: 'notes',
@@ -117,9 +150,12 @@ const APP_LIBRARY: AppDefinition[] = [
     subtitle: 'Roadmap, notes and sprint view',
     description: 'A compact board for launch tasks and milestones.',
     icon: FileText,
-    tone: 'from-[#e1c3ff] to-[#9f63ff]',
   },
 ]
+
+const APP_IDS = new Set<AppId>(APP_LIBRARY.map((app) => app.id))
+const ACCENT_IDS = new Set<Accent>(['azure', 'sunset', 'forest'])
+const WALLPAPER_IDS = new Set<WallpaperId>(['aurora', 'harbor', 'neon', 'bloom'])
 
 const SEARCH_ITEMS: SearchItem[] = [
   ...APP_LIBRARY.map((app) => ({
@@ -196,11 +232,18 @@ const METRICS = [
   { label: 'Shield', value: 'Secure', icon: Shield },
 ]
 
-const WALLPAPERS = [
-  'Aurora Causeway',
-  'Glass Harbor',
-  'Neon Skyline',
-  'Motion Bloom',
+const WALLPAPERS: { id: WallpaperId; title: string; subtitle: string }[] = [
+  { id: 'aurora', title: 'Aurora Causeway', subtitle: 'Cool daylight glass' },
+  { id: 'harbor', title: 'Glass Harbor', subtitle: 'Calm coastal shine' },
+  { id: 'neon', title: 'Neon Skyline', subtitle: 'Lively night energy' },
+  { id: 'bloom', title: 'Motion Bloom', subtitle: 'Soft atmospheric gradients' },
+]
+
+const SHORTCUT_HINTS = [
+  'Ctrl/⌘ + K 打开搜索',
+  'Ctrl/⌘ + Space 打开开始菜单',
+  'Alt + 1-6 快速启动应用',
+  'Esc 关闭面板',
 ]
 
 function getApp(appId: AppId) {
@@ -215,19 +258,124 @@ function nextZ(windows: WindowState[]) {
   return windows.reduce((max, window) => Math.max(max, window.z), 0) + 1
 }
 
+function createWindow(appId: AppId, index: number, z: number): WindowState {
+  const position = DEFAULT_WINDOW_POSITIONS[index % DEFAULT_WINDOW_POSITIONS.length]
+  return {
+    appId,
+    minimized: false,
+    layout: 'window',
+    position,
+    z,
+  }
+}
+
+function isAppId(value: unknown): value is AppId {
+  return typeof value === 'string' && APP_IDS.has(value as AppId)
+}
+
+function isAccent(value: unknown): value is Accent {
+  return typeof value === 'string' && ACCENT_IDS.has(value as Accent)
+}
+
+function isWallpaper(value: unknown): value is WallpaperId {
+  return typeof value === 'string' && WALLPAPER_IDS.has(value as WallpaperId)
+}
+
+function normalizePosition(position: WindowPosition): WindowPosition {
+  if (typeof window === 'undefined') {
+    return position
+  }
+
+  const maxX = Math.max(32, window.innerWidth - 900)
+  const maxY = Math.max(96, window.innerHeight - 420)
+
+  return {
+    x: Math.min(Math.max(24, Math.round(position.x)), maxX),
+    y: Math.min(Math.max(88, Math.round(position.y)), maxY),
+  }
+}
+
+function loadStoredShellState(): StoredShellState | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const raw = window.localStorage.getItem(SHELL_STORAGE_KEY)
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredShellState>
+    const windows = Array.isArray(parsed.windows)
+      ? parsed.windows.flatMap((item, index) => {
+          if (!item || !isAppId(item.appId)) {
+            return []
+          }
+
+          const layout: LayoutMode =
+            item.layout === 'left' ||
+            item.layout === 'right' ||
+            item.layout === 'maximized'
+              ? item.layout
+              : 'window'
+
+          const x =
+            typeof item.position?.x === 'number'
+              ? item.position.x
+              : DEFAULT_WINDOW_POSITIONS[index % DEFAULT_WINDOW_POSITIONS.length].x
+          const y =
+            typeof item.position?.y === 'number'
+              ? item.position.y
+              : DEFAULT_WINDOW_POSITIONS[index % DEFAULT_WINDOW_POSITIONS.length].y
+
+          return [
+            {
+              appId: item.appId,
+              minimized: Boolean(item.minimized),
+              layout,
+              position: normalizePosition({ x, y }),
+              z: typeof item.z === 'number' ? item.z : index + 1,
+            },
+          ]
+        })
+      : []
+
+    return {
+      accent: isAccent(parsed.accent) ? parsed.accent : 'azure',
+      focusMode: parsed.focusMode ?? true,
+      wallpaper: isWallpaper(parsed.wallpaper) ? parsed.wallpaper : 'aurora',
+      wifiEnabled: parsed.wifiEnabled ?? true,
+      windows: windows.length > 0 ? windows : [createWindow('explorer', 0, 1)],
+    }
+  } catch {
+    return null
+  }
+}
+
 function App() {
-  const [windows, setWindows] = useState<WindowState[]>([
-    { appId: 'explorer', minimized: false, layout: 'window', offset: 0, z: 1 },
-  ])
-  const [accent, setAccent] = useState<Accent>('azure')
+  const [bootState] = useState<StoredShellState | null>(() => loadStoredShellState())
+  const [windows, setWindows] = useState<WindowState[]>(
+    () => bootState?.windows ?? [createWindow('explorer', 0, 1)],
+  )
+  const [accent, setAccent] = useState<Accent>(() => bootState?.accent ?? 'azure')
   const [startOpen, setStartOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [widgetsOpen, setWidgetsOpen] = useState(true)
   const [quickPanelOpen, setQuickPanelOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [focusMode, setFocusMode] = useState(true)
-  const [wifiEnabled, setWifiEnabled] = useState(true)
+  const [focusMode, setFocusMode] = useState<boolean>(
+    () => bootState?.focusMode ?? true,
+  )
+  const [wallpaper, setWallpaper] = useState<WallpaperId>(
+    () => bootState?.wallpaper ?? 'aurora',
+  )
+  const [wifiEnabled, setWifiEnabled] = useState<boolean>(
+    () => bootState?.wifiEnabled ?? true,
+  )
   const [now, setNow] = useState(new Date())
+  const [draggingId, setDraggingId] = useState<AppId | null>(null)
+  const dragRef = useRef<DragState | null>(null)
 
   const deferredQuery = useDeferredValue(searchQuery.trim().toLowerCase())
   const visibleWindows = windows.filter((window) => !window.minimized)
@@ -248,11 +396,34 @@ function App() {
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    window.localStorage.setItem(
+      SHELL_STORAGE_KEY,
+      JSON.stringify({
+        accent,
+        focusMode,
+        wallpaper,
+        wifiEnabled,
+        windows,
+      } satisfies StoredShellState),
+    )
+  }, [accent, focusMode, wallpaper, wifiEnabled, windows])
+
   const dismissPanels = () => {
     setStartOpen(false)
     setSearchOpen(false)
     setWidgetsOpen(false)
     setQuickPanelOpen(false)
+  }
+
+  const showPanel = (panel: PanelId) => {
+    if (panel !== 'search' && searchQuery) {
+      setSearchQuery('')
+    }
+    setStartOpen(panel === 'start')
+    setSearchOpen(panel === 'search')
+    setWidgetsOpen(panel === 'widgets')
+    setQuickPanelOpen(panel === 'quick')
   }
 
   const focusWindow = (appId: AppId) => {
@@ -275,16 +446,8 @@ function App() {
             window.appId === appId ? { ...window, minimized: false, z: top } : window,
           )
         }
-        return [
-          ...current,
-          {
-            appId,
-            minimized: false,
-            layout: 'window',
-            offset: current.length % 4,
-            z: top,
-          },
-        ]
+
+        return [...current, createWindow(appId, current.length, top)]
       })
     })
   }
@@ -295,10 +458,12 @@ function App() {
       launchApp(appId)
       return
     }
+
     if (target.minimized || activeWindow !== appId) {
       focusWindow(appId)
       return
     }
+
     setWindows((current) =>
       current.map((window) =>
         window.appId === appId ? { ...window, minimized: true } : window,
@@ -319,6 +484,100 @@ function App() {
     )
   }
 
+  const toggleMaximize = (appId: AppId) => {
+    const target = windows.find((window) => window.appId === appId)
+    if (!target) {
+      return
+    }
+
+    setLayout(appId, target.layout === 'maximized' ? 'window' : 'maximized')
+  }
+
+  const startWindowDrag = (
+    appId: AppId,
+    position: WindowPosition,
+    layout: LayoutMode,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (layout !== 'window') {
+      return
+    }
+
+    dragRef.current = {
+      appId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: position.x,
+      originY: position.y,
+    }
+    setDraggingId(appId)
+    focusWindow(appId)
+  }
+
+  const handlePointerMove = useEffectEvent((event: PointerEvent) => {
+    if (!dragRef.current) {
+      return
+    }
+
+    const drag = dragRef.current
+    const nextPosition = normalizePosition({
+      x: drag.originX + event.clientX - drag.startX,
+      y: drag.originY + event.clientY - drag.startY,
+    })
+
+    setWindows((current) =>
+      current.map((window) =>
+        window.appId === drag.appId
+          ? { ...window, position: nextPosition, minimized: false }
+          : window,
+      ),
+    )
+  })
+
+  const stopDragging = useEffectEvent(() => {
+    dragRef.current = null
+    setDraggingId(null)
+  })
+
+  const handleKeyboardShortcuts = useEffectEvent((event: KeyboardEvent) => {
+    const key = event.key.toLowerCase()
+
+    if (key === 'escape') {
+      dismissPanels()
+      stopDragging()
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && key === 'k') {
+      event.preventDefault()
+      showPanel('search')
+      return
+    }
+
+    if ((event.ctrlKey || event.metaKey) && key === ' ') {
+      event.preventDefault()
+      showPanel(startOpen ? null : 'start')
+      return
+    }
+
+    if (event.altKey && /^[1-6]$/.test(key)) {
+      event.preventDefault()
+      launchApp(PINNED_APPS[Number(key) - 1])
+    }
+  })
+
+  useEffect(() => {
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopDragging)
+    window.addEventListener('keydown', handleKeyboardShortcuts)
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopDragging)
+      window.removeEventListener('keydown', handleKeyboardShortcuts)
+    }
+  }, [])
+
   const formattedTime = now.toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -330,7 +589,7 @@ function App() {
   })
 
   return (
-    <main className={`desktop-shell theme-${accent}`}>
+    <main className={`desktop-shell theme-${accent} wallpaper-${wallpaper}`}>
       <div className="wallpaper-glow wallpaper-glow-left" />
       <div className="wallpaper-glow wallpaper-glow-right" />
       <div className="wallpaper-grid" />
@@ -354,15 +613,14 @@ function App() {
             <Rocket size={16} />
             <span>{visibleWindows.length} Active Apps</span>
           </div>
+          <div className="metric-pill">
+            <MonitorCog size={16} />
+            <span>Workspace auto-save</span>
+          </div>
           <button
             className="metric-pill metric-pill-button"
             type="button"
-            onClick={() => {
-              setWidgetsOpen((current) => !current)
-              setStartOpen(false)
-              setSearchOpen(false)
-              setQuickPanelOpen(false)
-            }}
+            onClick={() => showPanel(widgetsOpen ? null : 'widgets')}
           >
             <Bell size={16} />
             <span>Widgets</span>
@@ -410,12 +668,7 @@ function App() {
             <button
               className="secondary-button"
               type="button"
-              onClick={() => {
-                setSearchOpen(true)
-                setStartOpen(false)
-                setWidgetsOpen(false)
-                setQuickPanelOpen(false)
-              }}
+              onClick={() => showPanel('search')}
             >
               Search Everything
             </button>
@@ -434,6 +687,13 @@ function App() {
               )
             })}
           </div>
+          <div className="shortcut-hints">
+            {SHORTCUT_HINTS.map((hint) => (
+              <span key={hint} className="hint-chip">
+                {hint}
+              </span>
+            ))}
+          </div>
         </section>
 
         <aside className="spotlight-card">
@@ -444,11 +704,11 @@ function App() {
           <ul className="spotlight-list">
             <li>
               <MonitorCog size={16} />
-              <span>System polish pass completed</span>
+              <span>Window dragging and save restore enabled</span>
             </li>
             <li>
               <Palette size={16} />
-              <span>Three scene presets ready for switching</span>
+              <span>Theme presets and live wallpaper switching ready</span>
             </li>
             <li>
               <Calendar size={16} />
@@ -488,7 +748,7 @@ function App() {
                 </div>
                 <ul>
                   <li>23:00 Product polish review</li>
-                  <li>23:30 Final push to GitHub</li>
+                  <li>23:30 Interface stabilization</li>
                   <li>00:00 Release handoff</li>
                 </ul>
               </article>
@@ -503,6 +763,17 @@ function App() {
                 <button type="button" onClick={() => launchApp('notes')}>
                   Open Release Board
                 </button>
+              </article>
+              <article className="widget">
+                <div className="widget-header">
+                  <LayoutGrid size={18} />
+                  <span>Shortcuts</span>
+                </div>
+                <ul>
+                  <li>Ctrl/⌘ + K 搜索</li>
+                  <li>Ctrl/⌘ + Space 开始</li>
+                  <li>Alt + 1-6 启动应用</li>
+                </ul>
               </article>
             </div>
           </aside>
@@ -525,7 +796,11 @@ function App() {
             </div>
             <div className="panel-title">
               <strong>{deferredQuery ? 'Search Results' : 'Recommended'}</strong>
-              <span>{deferredQuery ? 'Instant matches across the shell' : 'Start from frequent tasks'}</span>
+              <span>
+                {deferredQuery
+                  ? 'Instant matches across the shell'
+                  : 'Start from frequent tasks'}
+              </span>
             </div>
             <div className="search-results">
               {searchResults.map((item) => (
@@ -652,9 +927,10 @@ function App() {
             const app = getApp(window.appId)
             const Icon = app.icon
             const style: CSSProperties = { zIndex: window.z }
+
             if (window.layout === 'window') {
-              style.top = `calc(13% + ${window.offset * 1.5}rem)`
-              style.left = `calc(15% + ${window.offset * 1.75}rem)`
+              style.top = `${window.position.y}px`
+              style.left = `${window.position.x}px`
             }
 
             return (
@@ -662,11 +938,22 @@ function App() {
                 key={window.appId}
                 className={`window-card layout-${window.layout} ${
                   activeWindow === window.appId ? 'is-active' : ''
-                }`}
+                } ${draggingId === window.appId ? 'is-dragging' : ''}`}
                 style={style}
                 onMouseDown={() => focusWindow(window.appId)}
               >
-                <div className="window-topbar">
+                <div
+                  className="window-topbar"
+                  onDoubleClick={() => toggleMaximize(window.appId)}
+                  onPointerDown={(event) =>
+                    startWindowDrag(
+                      window.appId,
+                      window.position,
+                      window.layout,
+                      event,
+                    )
+                  }
+                >
                   <div className="window-app-meta">
                     <span className={`shortcut-icon bg-${app.id}`}>
                       <Icon size={16} />
@@ -676,20 +963,53 @@ function App() {
                       <span>{app.subtitle}</span>
                     </div>
                   </div>
-                  <div className="window-controls">
-                    <button type="button" onClick={() => setWindows((current) => current.map((item) => item.appId === window.appId ? { ...item, minimized: true } : item))}>
+                  <span className="window-drag-hint">Drag or double-click title bar</span>
+                  <div
+                    className="window-controls"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Minimize ${app.title}`}
+                      onClick={() =>
+                        setWindows((current) =>
+                          current.map((item) =>
+                            item.appId === window.appId
+                              ? { ...item, minimized: true }
+                              : item,
+                          ),
+                        )
+                      }
+                    >
                       <Minimize2 size={14} />
                     </button>
-                    <button type="button" onClick={() => setLayout(window.appId, 'left')}>
+                    <button
+                      type="button"
+                      aria-label={`Snap ${app.title} left`}
+                      onClick={() => setLayout(window.appId, 'left')}
+                    >
                       L
                     </button>
-                    <button type="button" onClick={() => setLayout(window.appId, 'maximized')}>
+                    <button
+                      type="button"
+                      aria-label={`Toggle maximize ${app.title}`}
+                      onClick={() => toggleMaximize(window.appId)}
+                    >
                       <Maximize2 size={14} />
                     </button>
-                    <button type="button" onClick={() => setLayout(window.appId, 'right')}>
+                    <button
+                      type="button"
+                      aria-label={`Snap ${app.title} right`}
+                      onClick={() => setLayout(window.appId, 'right')}
+                    >
                       R
                     </button>
-                    <button className="danger" type="button" onClick={() => closeWindow(window.appId)}>
+                    <button
+                      className="danger"
+                      type="button"
+                      aria-label={`Close ${app.title}`}
+                      onClick={() => closeWindow(window.appId)}
+                    >
                       <X size={14} />
                     </button>
                   </div>
@@ -699,7 +1019,17 @@ function App() {
                     accent={accent}
                     appId={window.appId}
                     focusMode={focusMode}
+                    resetWorkspace={() => {
+                      globalThis.localStorage.removeItem(SHELL_STORAGE_KEY)
+                      setAccent('azure')
+                      setFocusMode(true)
+                      setWallpaper('aurora')
+                      setWifiEnabled(true)
+                      setWindows([createWindow('explorer', 0, 1)])
+                    }}
                     setAccent={setAccent}
+                    setWallpaper={setWallpaper}
+                    wallpaper={wallpaper}
                     launchApp={launchApp}
                   />
                 </div>
@@ -714,28 +1044,18 @@ function App() {
           <button
             className={startOpen ? 'taskbar-button active' : 'taskbar-button'}
             type="button"
-            onClick={() => {
-              setStartOpen((current) => !current)
-              setSearchOpen(false)
-              setWidgetsOpen(false)
-              setQuickPanelOpen(false)
-            }}
+            onClick={() => showPanel(startOpen ? null : 'start')}
           >
             <LayoutGrid size={18} />
           </button>
           <button
             className={searchOpen ? 'taskbar-button active' : 'taskbar-button'}
             type="button"
-            onClick={() => {
-              setSearchOpen((current) => !current)
-              setStartOpen(false)
-              setWidgetsOpen(false)
-              setQuickPanelOpen(false)
-            }}
+            onClick={() => showPanel(searchOpen ? null : 'search')}
           >
             <Search size={18} />
           </button>
-          {PINNED_APPS.map((appId) => {
+          {PINNED_APPS.map((appId, index) => {
             const app = getApp(appId)
             const Icon = app.icon
             const open = windows.some((window) => window.appId === appId)
@@ -743,8 +1063,15 @@ function App() {
             return (
               <button
                 key={appId}
-                className={focused ? 'taskbar-button app-button focused' : open ? 'taskbar-button app-button open' : 'taskbar-button app-button'}
+                className={
+                  focused
+                    ? 'taskbar-button app-button focused'
+                    : open
+                      ? 'taskbar-button app-button open'
+                      : 'taskbar-button app-button'
+                }
                 type="button"
+                title={`Alt + ${index + 1}`}
                 onClick={() => toggleTaskbarWindow(appId)}
               >
                 <Icon size={18} />
@@ -755,12 +1082,7 @@ function App() {
         <button
           className="taskbar-tray"
           type="button"
-          onClick={() => {
-            setQuickPanelOpen((current) => !current)
-            setStartOpen(false)
-            setSearchOpen(false)
-            setWidgetsOpen(false)
-          }}
+          onClick={() => showPanel(quickPanelOpen ? null : 'quick')}
         >
           <div className="tray-icons">
             <Wifi size={14} />
@@ -781,13 +1103,19 @@ function WindowContent({
   appId,
   accent,
   focusMode,
+  resetWorkspace,
   setAccent,
+  setWallpaper,
+  wallpaper,
   launchApp,
 }: {
   appId: AppId
   accent: Accent
   focusMode: boolean
+  resetWorkspace: () => void
   setAccent: (accent: Accent) => void
+  setWallpaper: (wallpaper: WallpaperId) => void
+  wallpaper: WallpaperId
   launchApp: (appId: AppId) => void
 }) {
   if (appId === 'explorer') {
@@ -850,7 +1178,7 @@ function WindowContent({
         <div className="browser-grid">
           {[
             ['Workspaces', 'Continue the Windows 11 inspired shell build.'],
-            ['Release Notes', 'Version 1.0 ships with six desktop apps.'],
+            ['Release Notes', 'Version 1.1 adds drag, shortcuts and restore.'],
             ['Documentation', 'Interaction model, panels and snap layouts.'],
           ].map(([title, copy]) => (
             <article key={title} className="browser-card">
@@ -899,7 +1227,7 @@ function WindowContent({
               ['Secure boot', 'Enabled'],
               ['Focus assist', focusMode ? 'Priority only' : 'Off'],
               ['Graphics mode', 'Balanced'],
-              ['Windows memory', '8.6 GB in use'],
+              ['Workspace state', 'Restores after reload'],
             ].map(([label, value]) => (
               <div key={label} className="settings-row">
                 <span>{label}</span>
@@ -907,6 +1235,9 @@ function WindowContent({
               </div>
             ))}
           </div>
+          <button className="secondary-button settings-reset" type="button" onClick={resetWorkspace}>
+            Reset Workspace
+          </button>
         </section>
       </div>
     )
@@ -918,8 +1249,9 @@ function WindowContent({
         <div className="terminal-line prompt">skyfo@desktop:~$ pnpm release --ship</div>
         <div className="terminal-line ok">[ok] UI shell booted in 198ms</div>
         <div className="terminal-line ok">[ok] taskbar services attached</div>
-        <div className="terminal-line">[info] start menu index warmed</div>
-        <div className="terminal-line">[info] translucent surfaces calibrated</div>
+        <div className="terminal-line ok">[ok] local restore checkpoint written</div>
+        <div className="terminal-line">[info] keyboard shortcuts listener active</div>
+        <div className="terminal-line">[info] draggable windows ready for interaction</div>
         <div className="terminal-line prompt">skyfo@desktop:~$ tail -f launch.log</div>
       </div>
     )
@@ -928,13 +1260,20 @@ function WindowContent({
   if (appId === 'photos') {
     return (
       <div className="gallery-grid">
-        {WALLPAPERS.map((name, index) => (
-          <article key={name} className={`gallery-card gallery-${index + 1}`}>
+        {WALLPAPERS.map((item, index) => (
+          <button
+            key={item.id}
+            className={`gallery-card gallery-${index + 1} ${
+              wallpaper === item.id ? 'active' : ''
+            }`}
+            type="button"
+            onClick={() => setWallpaper(item.id)}
+          >
             <div className="gallery-copy">
-              <strong>{name}</strong>
-              <span>Wallpaper collection</span>
+              <strong>{item.title}</strong>
+              <span>{item.subtitle}</span>
             </div>
-          </article>
+          </button>
         ))}
       </div>
     )
@@ -951,17 +1290,17 @@ function WindowContent({
           <article className="kanban-column">
             <strong>Now</strong>
             <div className="kanban-card">Finalize desktop interactions</div>
-            <div className="kanban-card">Polish taskbar states</div>
+            <div className="kanban-card">Persist shell state locally</div>
           </article>
           <article className="kanban-column">
             <strong>Next</strong>
             <div className="kanban-card">Capture preview screenshots</div>
-            <div className="kanban-card">Publish to GitHub</div>
+            <div className="kanban-card">Ship drag-resize v2</div>
           </article>
           <article className="kanban-column">
             <strong>Later</strong>
-            <div className="kanban-card">Add drag-and-snap resizing</div>
-            <div className="kanban-card">Persist user preferences</div>
+            <div className="kanban-card">Add boot and lock screen</div>
+            <div className="kanban-card">Persist user wallpaper choice</div>
           </article>
         </div>
       </section>

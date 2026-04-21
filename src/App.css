@@ -44,6 +44,27 @@
   --accent-2: #c7ffe1;
 }
 
+.wallpaper-harbor {
+  background:
+    radial-gradient(circle at 16% 20%, rgba(126, 235, 255, 0.24), transparent 18%),
+    radial-gradient(circle at 78% 22%, rgba(193, 240, 255, 0.18), transparent 18%),
+    linear-gradient(155deg, #071926, #194868 48%, #0e3056);
+}
+
+.wallpaper-neon {
+  background:
+    radial-gradient(circle at 22% 22%, rgba(252, 102, 255, 0.2), transparent 18%),
+    radial-gradient(circle at 76% 24%, rgba(79, 186, 255, 0.22), transparent 18%),
+    linear-gradient(150deg, #16061d, #2f1246 48%, #0d1f42);
+}
+
+.wallpaper-bloom {
+  background:
+    radial-gradient(circle at 24% 20%, rgba(255, 176, 210, 0.22), transparent 18%),
+    radial-gradient(circle at 78% 22%, rgba(255, 223, 159, 0.18), transparent 18%),
+    linear-gradient(150deg, #141021, #47315c 48%, #19304e);
+}
+
 .wallpaper-glow {
   position: absolute;
   inset: auto;
@@ -359,6 +380,12 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+.settings-reset {
+  margin-top: 0.85rem;
+  width: 100%;
+  justify-content: center;
+}
+
 .primary-button:hover,
 .secondary-button:hover {
   transform: translateY(-2px);
@@ -369,6 +396,22 @@
   gap: 0.85rem;
   margin-top: 1.55rem;
   flex-wrap: wrap;
+}
+
+.shortcut-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1.1rem;
+}
+
+.hint-chip {
+  padding: 0.5rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .metric-card {
@@ -696,6 +739,16 @@
   padding: 0.95rem 1rem;
   background: rgba(255, 255, 255, 0.04);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+}
+
+.window-card.is-dragging {
+  transform: scale(1.01);
+}
+
+.window-card.is-dragging .window-topbar {
+  cursor: grabbing;
 }
 
 .window-app-meta {
@@ -719,6 +772,7 @@
 
 .window-controls {
   gap: 0.45rem;
+  margin-left: auto;
 }
 
 .window-controls button {
@@ -733,6 +787,12 @@
 
 .window-controls .danger:hover {
   background: rgba(255, 107, 107, 0.22);
+}
+
+.window-drag-hint {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.01em;
 }
 
 .window-body {
@@ -913,6 +973,13 @@
   border-radius: 1.35rem;
   position: relative;
   overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .gallery-card::after {
@@ -928,6 +995,12 @@
   right: 1rem;
   bottom: 1rem;
   z-index: 1;
+}
+
+.gallery-card.active {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.28);
 }
 
 .gallery-1 {
@@ -1178,5 +1251,9 @@
 
   .window-controls {
     flex-wrap: wrap;
+  }
+
+  .window-drag-hint {
+    display: none;
   }
 }
