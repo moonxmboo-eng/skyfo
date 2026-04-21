@@ -85,6 +85,8 @@ type SearchItem = {
 
 type StoredShellState = {
   accent: Accent
+  audioEnabled: boolean
+  batterySaver: boolean
   focusMode: boolean
   wallpaper: WallpaperId
   wifiEnabled: boolean
@@ -343,6 +345,8 @@ function loadStoredShellState(): StoredShellState | null {
 
     return {
       accent: isAccent(parsed.accent) ? parsed.accent : 'azure',
+      audioEnabled: parsed.audioEnabled ?? true,
+      batterySaver: parsed.batterySaver ?? false,
       focusMode: parsed.focusMode ?? true,
       wallpaper: isWallpaper(parsed.wallpaper) ? parsed.wallpaper : 'aurora',
       wifiEnabled: parsed.wifiEnabled ?? true,
@@ -364,6 +368,12 @@ function App() {
   const [widgetsOpen, setWidgetsOpen] = useState(true)
   const [quickPanelOpen, setQuickPanelOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [audioEnabled, setAudioEnabled] = useState<boolean>(
+    () => bootState?.audioEnabled ?? true,
+  )
+  const [batterySaver, setBatterySaver] = useState<boolean>(
+    () => bootState?.batterySaver ?? false,
+  )
   const [focusMode, setFocusMode] = useState<boolean>(
     () => bootState?.focusMode ?? true,
   )
@@ -401,13 +411,15 @@ function App() {
       SHELL_STORAGE_KEY,
       JSON.stringify({
         accent,
+        audioEnabled,
+        batterySaver,
         focusMode,
         wallpaper,
         wifiEnabled,
         windows,
       } satisfies StoredShellState),
     )
-  }, [accent, focusMode, wallpaper, wifiEnabled, windows])
+  }, [accent, audioEnabled, batterySaver, focusMode, wallpaper, wifiEnabled, windows])
 
   const dismissPanels = () => {
     setStartOpen(false)
@@ -881,26 +893,46 @@ function App() {
               <button
                 className={wifiEnabled ? 'toggle active' : 'toggle'}
                 type="button"
-                onClick={() => setWifiEnabled((current) => !current)}
+                onClick={() => {
+                  setWifiEnabled((current) => !current)
+                  setQuickPanelOpen(false)
+                }}
               >
                 <Wifi size={18} />
-                <span>Wi-Fi</span>
+                <span>{wifiEnabled ? 'Wi-Fi On' : 'Wi-Fi Off'}</span>
               </button>
               <button
                 className={focusMode ? 'toggle active' : 'toggle'}
                 type="button"
-                onClick={() => setFocusMode((current) => !current)}
+                onClick={() => {
+                  setFocusMode((current) => !current)
+                  setQuickPanelOpen(false)
+                }}
               >
                 <MoonStar size={18} />
-                <span>Focus</span>
+                <span>{focusMode ? 'Focus On' : 'Focus Off'}</span>
               </button>
-              <button className="toggle active" type="button">
+              <button
+                className={audioEnabled ? 'toggle active' : 'toggle'}
+                type="button"
+                onClick={() => {
+                  setAudioEnabled((current) => !current)
+                  setQuickPanelOpen(false)
+                }}
+              >
                 <Volume2 size={18} />
-                <span>Audio</span>
+                <span>{audioEnabled ? 'Audio On' : 'Audio Muted'}</span>
               </button>
-              <button className="toggle active" type="button">
+              <button
+                className={batterySaver ? 'toggle active' : 'toggle'}
+                type="button"
+                onClick={() => {
+                  setBatterySaver((current) => !current)
+                  setQuickPanelOpen(false)
+                }}
+              >
                 <BatteryCharging size={18} />
-                <span>Battery</span>
+                <span>{batterySaver ? 'Battery Saver' : 'Battery Normal'}</span>
               </button>
             </div>
             <div className="theme-stack">
@@ -909,7 +941,10 @@ function App() {
                   key={theme.id}
                   className={theme.id === accent ? 'theme-option active' : 'theme-option'}
                   type="button"
-                  onClick={() => setAccent(theme.id)}
+                  onClick={() => {
+                    setAccent(theme.id)
+                    setQuickPanelOpen(false)
+                  }}
                 >
                   <div>
                     <strong>{theme.title}</strong>
@@ -1018,10 +1053,14 @@ function App() {
                   <WindowContent
                     accent={accent}
                     appId={window.appId}
+                    audioEnabled={audioEnabled}
+                    batterySaver={batterySaver}
                     focusMode={focusMode}
                     resetWorkspace={() => {
                       globalThis.localStorage.removeItem(SHELL_STORAGE_KEY)
                       setAccent('azure')
+                      setAudioEnabled(true)
+                      setBatterySaver(false)
                       setFocusMode(true)
                       setWallpaper('aurora')
                       setWifiEnabled(true)
@@ -1029,7 +1068,9 @@ function App() {
                     }}
                     setAccent={setAccent}
                     setWallpaper={setWallpaper}
+                    setWifiEnabled={setWifiEnabled}
                     wallpaper={wallpaper}
+                    wifiEnabled={wifiEnabled}
                     launchApp={launchApp}
                   />
                 </div>
@@ -1102,20 +1143,28 @@ function App() {
 function WindowContent({
   appId,
   accent,
+  audioEnabled,
+  batterySaver,
   focusMode,
   resetWorkspace,
   setAccent,
   setWallpaper,
+  setWifiEnabled,
   wallpaper,
+  wifiEnabled,
   launchApp,
 }: {
   appId: AppId
   accent: Accent
+  audioEnabled: boolean
+  batterySaver: boolean
   focusMode: boolean
   resetWorkspace: () => void
   setAccent: (accent: Accent) => void
   setWallpaper: (wallpaper: WallpaperId) => void
+  setWifiEnabled: React.Dispatch<React.SetStateAction<boolean>>
   wallpaper: WallpaperId
+  wifiEnabled: boolean
   launchApp: (appId: AppId) => void
 }) {
   if (appId === 'explorer') {
@@ -1124,14 +1173,18 @@ function WindowContent({
         <section className="content-panel">
           <div className="content-heading">
             <strong>Quick Access</strong>
-            <span>High-traffic folders and active workspaces</span>
+            <span>
+              {wifiEnabled
+                ? 'High-traffic folders and active workspaces'
+                : 'Offline mode: cloud locations are temporarily unavailable'}
+            </span>
           </div>
           <div className="folder-grid">
             {[
               ['Design System', '118 assets'],
               ['Client Demos', '24 presentations'],
-              ['Deployments', '9 environments'],
-              ['Research Vault', '62 references'],
+              ['Deployments', wifiEnabled ? '9 environments' : 'Offline: sync paused'],
+              ['Research Vault', wifiEnabled ? '62 references' : 'Offline cache only'],
             ].map(([title, meta]) => (
               <article key={title} className="folder-card">
                 <FolderOpen size={18} />
@@ -1170,21 +1223,40 @@ function WindowContent({
       <div className="browser-shell">
         <div className="browser-bar">
           <div className="tab-pill active">Sky Start</div>
-          <div className="address-bar">https://skyfo.local/start</div>
+          <div className="address-bar">
+            {wifiEnabled ? 'https://skyfo.local/start' : 'offline://network-unavailable'}
+          </div>
           <button className="browser-action" type="button" onClick={() => launchApp('notes')}>
             Open Board
           </button>
         </div>
+        {!wifiEnabled ? (
+          <section className="content-panel browser-offline">
+            <div className="content-heading">
+              <strong>Browser Offline</strong>
+              <span>The network toggle now controls app content, not just the icon.</span>
+            </div>
+            <p>
+              Cloud content is blocked while Wi-Fi is off. Reconnect to restore
+              release notes, docs and live workspace cards.
+            </p>
+            <button className="browser-action" type="button" onClick={() => setWifiEnabled(true)}>
+              Reconnect Network
+            </button>
+          </section>
+        ) : null}
         <div className="browser-grid">
           {[
-            ['Workspaces', 'Continue the Windows 11 inspired shell build.'],
-            ['Release Notes', 'Version 1.1 adds drag, shortcuts and restore.'],
-            ['Documentation', 'Interaction model, panels and snap layouts.'],
-          ].map(([title, copy]) => (
+            ['Workspaces', 'Continue the Windows 11 inspired shell build.', 'explorer'],
+            ['Release Notes', 'Version 1.1 adds drag, shortcuts and restore.', 'notes'],
+            ['Documentation', 'Interaction model, panels and snap layouts.', 'settings'],
+          ].map(([title, copy, target]) => (
             <article key={title} className="browser-card">
               <strong>{title}</strong>
               <p>{copy}</p>
-              <button type="button">Launch</button>
+              <button type="button" onClick={() => launchApp(target as AppId)}>
+                Open
+              </button>
             </article>
           ))}
         </div>
@@ -1225,7 +1297,10 @@ function WindowContent({
           <div className="settings-metrics">
             {[
               ['Secure boot', 'Enabled'],
+              ['Network', wifiEnabled ? 'Online' : 'Offline'],
               ['Focus assist', focusMode ? 'Priority only' : 'Off'],
+              ['Audio route', audioEnabled ? 'Speakers live' : 'Muted'],
+              ['Battery mode', batterySaver ? 'Saver enabled' : 'Balanced'],
               ['Graphics mode', 'Balanced'],
               ['Workspace state', 'Restores after reload'],
             ].map(([label, value]) => (
